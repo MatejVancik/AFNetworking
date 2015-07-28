@@ -1,5 +1,6 @@
 // UIImageView+AFNetworking.m
-// Copyright (c) 2011–2015 Alamofire Software Foundation (http://alamofire.org/)
+//
+// Copyright (c) 2013-2014 AFNetworking (http://afnetworking.com)
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -45,7 +46,7 @@
         _af_sharedImageRequestOperationQueue = [[NSOperationQueue alloc] init];
         _af_sharedImageRequestOperationQueue.maxConcurrentOperationCount = NSOperationQueueDefaultMaxConcurrentOperationCount;
     });
-
+    
     return _af_sharedImageRequestOperationQueue;
 }
 
@@ -69,12 +70,12 @@
     static dispatch_once_t oncePredicate;
     dispatch_once(&oncePredicate, ^{
         _af_defaultImageCache = [[AFImageCache alloc] init];
-
+        
         [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidReceiveMemoryWarningNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * __unused notification) {
             [_af_defaultImageCache removeAllObjects];
         }];
     });
-
+    
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wgnu"
     return objc_getAssociatedObject(self, @selector(sharedImageCache)) ?: _af_defaultImageCache;
@@ -93,7 +94,7 @@
     dispatch_once(&onceToken, ^{
         _af_defaultImageResponseSerializer = [AFImageResponseSerializer serializer];
     });
-
+    
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wgnu"
     return objc_getAssociatedObject(self, @selector(imageResponseSerializer)) ?: _af_defaultImageResponseSerializer;
@@ -115,48 +116,54 @@
 {
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
     [request addValue:@"image/*" forHTTPHeaderField:@"Accept"];
-
-    [self setImageWithURLRequest:request placeholderImage:placeholderImage success:nil failure:nil];
+    
+    [self setImageWithURLRequest:request placeholderImage:placeholderImage scaleIntoUIImage:false success:nil failure:nil];
 }
 
 - (void)setImageWithURLRequest:(NSURLRequest *)urlRequest
               placeholderImage:(UIImage *)placeholderImage
+              scaleIntoUIImage:(Boolean)scaleIntoUIImage
                        success:(void (^)(NSURLRequest *request, NSHTTPURLResponse *response, UIImage *image))success
                        failure:(void (^)(NSURLRequest *request, NSHTTPURLResponse *response, NSError *error))failure
 {
     [self cancelImageRequestOperation];
-
+    
     UIImage *cachedImage = [[[self class] sharedImageCache] cachedImageForRequest:urlRequest];
     if (cachedImage) {
         if (success) {
-            success(urlRequest, nil, cachedImage);
+            success(nil, nil, cachedImage);
         } else {
             self.image = cachedImage;
         }
-
+        
         self.af_imageRequestOperation = nil;
     } else {
         if (placeholderImage) {
             self.image = placeholderImage;
         }
-
+        
         __weak __typeof(self)weakSelf = self;
         self.af_imageRequestOperation = [[AFHTTPRequestOperation alloc] initWithRequest:urlRequest];
         self.af_imageRequestOperation.responseSerializer = self.imageResponseSerializer;
         [self.af_imageRequestOperation setCompletionBlockWithSuccess:^(AFHTTPRequestOperation *operation, id responseObject) {
             __strong __typeof(weakSelf)strongSelf = weakSelf;
             if ([[urlRequest URL] isEqual:[strongSelf.af_imageRequestOperation.request URL]]) {
+                
+                if(scaleIntoUIImage){
+                    responseObject = [UIImageView resizeImage:responseObject scaledToWidth:self.frame.size.width * [[UIScreen mainScreen] scale]];
+                }
+                
                 if (success) {
                     success(urlRequest, operation.response, responseObject);
                 } else if (responseObject) {
                     strongSelf.image = responseObject;
                 }
-
+                
                 if (operation == strongSelf.af_imageRequestOperation){
-                        strongSelf.af_imageRequestOperation = nil;
+                    strongSelf.af_imageRequestOperation = nil;
                 }
             }
-
+            
             [[[strongSelf class] sharedImageCache] cacheImage:responseObject forRequest:urlRequest];
         } failure:^(AFHTTPRequestOperation *operation, NSError *error) {
             __strong __typeof(weakSelf)strongSelf = weakSelf;
@@ -164,15 +171,29 @@
                 if (failure) {
                     failure(urlRequest, operation.response, error);
                 }
-
+                
                 if (operation == strongSelf.af_imageRequestOperation){
-                        strongSelf.af_imageRequestOperation = nil;
+                    strongSelf.af_imageRequestOperation = nil;
                 }
             }
         }];
-
+        
         [[[self class] af_sharedImageRequestOperationQueue] addOperation:self.af_imageRequestOperation];
     }
+}
+
++ (UIImage*)resizeImage: (UIImage*) sourceImage scaledToWidth: (float) i_width {
+    float oldWidth = sourceImage.size.width;
+    float scaleFactor = i_width / oldWidth;
+    
+    float newHeight = sourceImage.size.height * scaleFactor;
+    float newWidth = oldWidth * scaleFactor;
+    
+    UIGraphicsBeginImageContext(CGSizeMake(newWidth, newHeight));
+    [sourceImage drawInRect:CGRectMake(0, 0, newWidth, newHeight)];
+    UIImage *newImage = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return newImage;
 }
 
 - (void)cancelImageRequestOperation {
@@ -198,8 +219,8 @@ static inline NSString * AFImageCacheKeyFromURLRequest(NSURLRequest *request) {
         default:
             break;
     }
-
-	return [self objectForKey:AFImageCacheKeyFromURLRequest(request)];
+    
+    return [self objectForKey:AFImageCacheKeyFromURLRequest(request)];
 }
 
 - (void)cacheImage:(UIImage *)image
